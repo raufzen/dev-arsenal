@@ -2,7 +2,6 @@ import unittest
 import sys
 import os
 
-# Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import devbox
 
@@ -40,13 +39,26 @@ class TestDevBox(unittest.TestCase):
         self.assertGreater(ts, 1700000000)
 
     def test_jwt_inspection(self):
-        # Sample dummy JWT (alg: none)
-        # header: {"alg": "none", "typ": "JWT"} -> eyJhbGciOiAibm9uZSIgfQ
-        # payload: {"sub": "12345", "name": "Rauf", "exp": 2500000000} -> eyJzdWIiOiAiMTIzNDUiLCAibmFtZSI6ICJSYXVmIiwgImV4cCI6IDI1MDAwMDAwMDB9
         token = "eyJhbGciOiAibm9uZSIgLCJ0eXAiOiAiSldUIn0.eyJzdWIiOiAiMTIzNDUiLCAibmFtZSI6ICJSYXVmIiwgImV4cCI6IDI1MDAwMDAwMDB9.signature"
         res = devbox.cmd_jwt(token)
         self.assertIsNotNone(res)
         self.assertEqual(res["payload"]["name"], "Rauf")
+
+    def test_url_parser(self):
+        res = devbox.cmd_url("https://example.com/api/test?user=rauf&debug=true")
+        self.assertEqual(res["scheme"], "https")
+        self.assertEqual(res["host"], "example.com")
+        self.assertEqual(res["params"]["user"], ["rauf"])
+
+    def test_regex_matcher(self):
+        matches = devbox.cmd_regex(r"\d+", "port 8080 or 443")
+        self.assertEqual(len(matches), 2)
+
+    def test_color_converter(self):
+        res = devbox.cmd_color("#FF5733")
+        self.assertEqual(res["r"], 255)
+        self.assertEqual(res["g"], 87)
+        self.assertEqual(res["b"], 51)
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,9 +19,11 @@ import urllib.parse
 import urllib.request
 import platform
 import shutil
+import http.server
+import threading
 from datetime import datetime, timezone
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 AUTHOR = "Rauf Zen (@raufzen)"
 REPO_URL = "https://github.com/raufzen/dev-arsenal"
 
@@ -35,6 +37,7 @@ class Colors:
     MAGENTA = "\033[95m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
+    BG_YELLOW = "\033[43m\033[30m"
     RESET = "\033[0m"
 
 def print_banner():
@@ -76,7 +79,6 @@ def cmd_base64(text, decode=False):
     """Encode or decode Base64 string."""
     if decode:
         try:
-            # Handle padding
             pad = len(text) % 4
             if pad:
                 text += "=" * (4 - pad)
@@ -117,7 +119,6 @@ def cmd_jwt(token):
     print(f"{Colors.GREEN}── Payload ─────────────────────────────────────────{Colors.RESET}")
     print(json.dumps(payload, indent=2))
 
-    # Check expiration
     if "exp" in payload:
         exp_ts = payload["exp"]
         exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
@@ -178,9 +179,8 @@ def cmd_timestamp(val=None):
         return int(now)
     else:
         try:
-            # check if numeric timestamp
             ts = float(val)
-            if ts > 1e11:  # milliseconds
+            if ts > 1e11:
                 ts /= 1000.0
             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
             print(f"\n{Colors.BOLD}⏰ Timestamp {val} Converted:{Colors.RESET}")
@@ -190,6 +190,66 @@ def cmd_timestamp(val=None):
         except ValueError:
             print(f"{Colors.RED}❌ Expected numeric timestamp or 'now'.{Colors.RESET}")
             return None
+
+def cmd_url(raw_url):
+    """Parse URL components, paths, and query parameters."""
+    if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+        raw_url = "https://" + raw_url
+    p = urllib.parse.urlparse(raw_url)
+    qs = urllib.parse.parse_qs(p.query)
+
+    print(f"\n{Colors.BOLD}🔗 URL Component Breakdown:{Colors.RESET}")
+    print(f"  {Colors.CYAN}Scheme:  {Colors.RESET}{p.scheme}")
+    print(f"  {Colors.BLUE}Host:    {Colors.RESET}{p.netloc}")
+    print(f"  {Colors.GREEN}Path:    {Colors.RESET}{p.path or '/'}")
+    if p.fragment:
+        print(f"  {Colors.MAGENTA}Fragment:{Colors.RESET}{p.fragment}")
+    if qs:
+        print(f"\n  {Colors.BOLD}Query Parameters ({len(qs)}):{Colors.RESET}")
+        for k, v in qs.items():
+            print(f"    {Colors.YELLOW}{k}{Colors.RESET} = {', '.join(v)}")
+    else:
+        print(f"  {Colors.DIM}No query parameters present.{Colors.RESET}")
+    return {"scheme": p.scheme, "host": p.netloc, "path": p.path, "params": qs}
+
+def cmd_regex(pattern, text):
+    """Test regular expression patterns with colorized match highlights."""
+    print(f"\n{Colors.BOLD}🔍 Regex Match Tester:{Colors.RESET}")
+    print(f"  Pattern: {Colors.CYAN}/{pattern}/{Colors.RESET}")
+    print(f"  Input:   {Colors.DIM}{repr(text)}{Colors.RESET}\n")
+    try:
+        matches = list(re.finditer(pattern, text))
+        if not matches:
+            print(f"  {Colors.RED}✖ No matches found.{Colors.RESET}")
+            return []
+
+        print(f"  {Colors.GREEN}✔ Found {len(matches)} match(es):{Colors.RESET}")
+        for i, m in enumerate(matches, 1):
+            print(f"    Match #{i}: {Colors.YELLOW}{repr(m.group(0))}{Colors.RESET} [span: {m.start()}..{m.end()}]")
+            if m.groups():
+                print(f"      Groups: {m.groups()}")
+        return matches
+    except Exception as e:
+        print(f"  {Colors.RED}Regex syntax error: {e}{Colors.RESET}")
+        return None
+
+def cmd_color(val):
+    """Convert HEX to RGB, HSL, and render live TrueColor swatch."""
+    clean = val.strip().lstrip("#")
+    if len(clean) == 3:
+        clean = "".join([c*2 for c in clean])
+    try:
+        r, g, b = tuple(int(clean[i:i+2], 16) for i in (0, 2, 4))
+        swatch = f"\033[48;2;{r};{g};{b}m        \033[0m"
+        print(f"\n{Colors.BOLD}🎨 Color Swatch & Converter:{Colors.RESET}")
+        print(f"  Swatch:  {swatch}")
+        print(f"  HEX:     {Colors.CYAN}#{clean.upper()}{Colors.RESET}")
+        print(f"  RGB:     {Colors.GREEN}rgb({r}, {g}, {b}){Colors.RESET}")
+        print(f"  CSS:     {Colors.MAGENTA}rgba({r}, {g}, {b}, 1.0){Colors.RESET}")
+        return {"hex": f"#{clean.upper()}", "r": r, "g": g, "b": b}
+    except Exception:
+        print(f"{Colors.RED}❌ Invalid hex color code: '{val}'. Example: #38bdf8 or 38bdf8{Colors.RESET}")
+        return None
 
 # ==================== 3. NETWORK & WEB ====================
 
@@ -214,6 +274,20 @@ def cmd_ip():
     print(f"  {Colors.CYAN}Local IP:{Colors.RESET}    {local_ip}")
     print(f"  {Colors.BLUE}Hostname:{Colors.RESET}    {hostname}")
     return {"public_ip": ip, "local_ip": local_ip, "hostname": hostname}
+
+def cmd_dns(domain):
+    """Resolve DNS records (A / AAAA / Canonical names) for a domain."""
+    print(f"\n{Colors.BOLD}🔎 DNS Lookup for {domain}...{Colors.RESET}")
+    try:
+        info = socket.getaddrinfo(domain, 80, proto=socket.IPPROTO_TCP)
+        ips = sorted(list(set([r[4][0] for r in info])))
+        print(f"  {Colors.GREEN}Resolved IP Addresses ({len(ips)}):{Colors.RESET}")
+        for ip in ips:
+            print(f"    • {Colors.CYAN}{ip}{Colors.RESET}")
+        return ips
+    except Exception as e:
+        print(f"  {Colors.RED}DNS resolution failed: {e}{Colors.RESET}")
+        return None
 
 def cmd_http(url):
     """Check HTTP response status, headers, and response latency."""
@@ -258,6 +332,27 @@ def cmd_port(host, port):
         print(f"  {Colors.RED}Connection error: {e}{Colors.RESET}")
         return False
 
+def cmd_serve(port=8080, directory="."):
+    """Launch instant local HTTP file server for Wi-Fi file transfer."""
+    os.chdir(directory)
+    hostname = socket.gethostname()
+    try:
+        local_ip = socket.gethostbyname(hostname)
+    except Exception:
+        local_ip = "127.0.0.1"
+
+    handler = http.server.SimpleHTTPRequestHandler
+    httpd = http.server.HTTPServer(("0.0.0.0", port), handler)
+    print(f"\n{Colors.BOLD}🚀 Instant HTTP Server Running!{Colors.RESET}")
+    print(f"  {Colors.GREEN}Local Address:{Colors.RESET}    http://127.0.0.1:{port}")
+    print(f"  {Colors.CYAN}Wi-Fi / LAN Share:{Colors.RESET} http://{local_ip}:{port}")
+    print(f"  {Colors.DIM}Serving directory: {os.path.abspath(directory)}{Colors.RESET}")
+    print(f"  {Colors.YELLOW}Press Ctrl+C to stop the server.{Colors.RESET}\n")
+    try:
+        httpd.serve_forever()
+    except (KeyboardInterrupt, SystemExit):
+        print(f"\n{Colors.RED}Server stopped.{Colors.RESET}")
+
 # ==================== 4. SYSTEM & AUDIT ====================
 
 def cmd_sys():
@@ -270,6 +365,37 @@ def cmd_sys():
     to_gb = lambda b: f"{b / (1024**3):.1f} GB"
     print(f"  {Colors.GREEN}Disk Space:{Colors.RESET}     {to_gb(used)} used / {to_gb(total)} total ({to_gb(free)} free)")
     return {"os": platform.system(), "python": platform.python_version()}
+
+def cmd_du(target_dir="."):
+    """Analyze directory disk usage and report top 10 largest files."""
+    print(f"\n{Colors.BOLD}📊 Disk Hog Analyzer for '{target_dir}'...{Colors.RESET}")
+    file_list = []
+    ignored = {".git", "node_modules", ".venv", "venv", "__pycache__"}
+    for root, dirs, files in os.walk(target_dir):
+        dirs[:] = [d for d in dirs if d not in ignored]
+        for f in files:
+            p = os.path.join(root, f)
+            try:
+                size = os.path.getsize(p)
+                file_list.append((size, p))
+            except Exception:
+                pass
+    file_list.sort(key=lambda x: x[0], reverse=True)
+    if not file_list:
+        print(f"  {Colors.DIM}No files found.{Colors.RESET}")
+        return []
+
+    def format_size(bytes_num):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_num < 1024.0:
+                return f"{bytes_num:.1f} {unit}"
+            bytes_num /= 1024.0
+        return f"{bytes_num:.1f} TB"
+
+    print(f"  {Colors.CYAN}Top {min(10, len(file_list))} Largest Files:{Colors.RESET}")
+    for sz, p in file_list[:10]:
+        print(f"    {Colors.YELLOW}{format_size(sz):>10}{Colors.RESET}  {p}")
+    return file_list[:10]
 
 def cmd_audit(target_dir="."):
     """Scan local directory for exposed secrets, API keys, and sensitive tokens."""
@@ -313,11 +439,17 @@ def interactive_menu():
   {Colors.CYAN}5.{Colors.RESET} 🆔 UUIDv4 Generator
   {Colors.CYAN}6.{Colors.RESET} 🔑 High-Entropy Password Generator
   {Colors.CYAN}7.{Colors.RESET} ⏰ Epoch Timestamp Converter
-  {Colors.CYAN}8.{Colors.RESET} 🌐 Public IP & Network Info
-  {Colors.CYAN}9.{Colors.RESET} 📡 HTTP Status & Latency Check
-  {Colors.CYAN}10.{Colors.RESET} 🔌 TCP Port Ping
-  {Colors.CYAN}11.{Colors.RESET} 💻 System Specs & Environment
-  {Colors.CYAN}12.{Colors.RESET} 🛡️ Local Secret Leak Scanner
+  {Colors.CYAN}8.{Colors.RESET} 🔗 URL Breakdown & Query Parameter Inspector
+  {Colors.CYAN}9.{Colors.RESET} 🔍 Regex Match Tester & Visualizer
+  {Colors.CYAN}10.{Colors.RESET} 🎨 Color Swatch Converter (HEX to RGB)
+  {Colors.CYAN}11.{Colors.RESET} 🌐 Public IP & Network Info
+  {Colors.CYAN}12.{Colors.RESET} 🔎 DNS Address Resolution
+  {Colors.CYAN}13.{Colors.RESET} 📡 HTTP Status & Latency Check
+  {Colors.CYAN}14.{Colors.RESET} 🔌 TCP Port Ping
+  {Colors.CYAN}15.{Colors.RESET} 🚀 Instant Wi-Fi HTTP File Sharing Server
+  {Colors.CYAN}16.{Colors.RESET} 💻 System Specs & Environment
+  {Colors.CYAN}17.{Colors.RESET} 📊 Disk Hog File Analyzer
+  {Colors.CYAN}18.{Colors.RESET} 🛡️ Local Secret Leak Scanner
   {Colors.RED}0.{Colors.RESET} 🚪 Exit
 """
     print(menu)
@@ -350,17 +482,36 @@ def interactive_menu():
         ts = input("Timestamp or 'now' [default now]: ").strip()
         cmd_timestamp(ts or "now")
     elif choice == "8":
-        cmd_ip()
+        url = input("Enter URL with params: ").strip()
+        cmd_url(url)
     elif choice == "9":
+        pat = input("Regex pattern: ").strip()
+        txt = input("Test string: ").strip()
+        cmd_regex(pat, txt)
+    elif choice == "10":
+        col = input("HEX Color (e.g. #38bdf8): ").strip()
+        cmd_color(col)
+    elif choice == "11":
+        cmd_ip()
+    elif choice == "12":
+        dom = input("Domain name (e.g. github.com): ").strip()
+        cmd_dns(dom)
+    elif choice == "13":
         url = input("Enter URL (e.g. google.com): ").strip()
         cmd_http(url)
-    elif choice == "10":
+    elif choice == "14":
         host = input("Host (e.g. github.com): ").strip()
         port = input("Port (e.g. 443): ").strip()
         cmd_port(host, int(port) if port.isdigit() else 80)
-    elif choice == "11":
+    elif choice == "15":
+        port = input("Port [default 8080]: ").strip()
+        cmd_serve(int(port) if port.isdigit() else 8080)
+    elif choice == "16":
         cmd_sys()
-    elif choice == "12":
+    elif choice == "17":
+        path = input("Directory to analyze [default .]: ").strip()
+        cmd_du(path or ".")
+    elif choice == "18":
         path = input("Directory to scan [default .]: ").strip()
         cmd_audit(path or ".")
     elif choice == "0":
@@ -394,10 +545,16 @@ def main():
   uuid [-n count]           Generate cryptographically random UUIDv4
   pass [-l len]             Generate secure high-entropy password
   time [timestamp|now]      Convert Unix epoch to human UTC or get current
+  url <url>                 Parse URL components & query parameters
+  regex <pattern> <text>    Test regular expression matches
+  color <#hex>              Display TrueColor swatch and RGB values
   ip                        Show public IP, local IP, and hostname
+  dns <domain>              Resolve DNS IP addresses
   http <url>                Inspect HTTP status code, headers & latency
   port <host> <port>        Check if a TCP port is open
+  serve [port]              Launch instant local Wi-Fi file server
   sys                       Display OS, architecture, disk metrics
+  du [dir]                  Analyze largest files in directory
   audit [dir]               Audit directory for exposed secrets
   menu                      Launch interactive terminal menu
 """)
@@ -427,14 +584,27 @@ def main():
         cmd_password(l)
     elif cmd == "time":
         cmd_timestamp(args[0] if args else "now")
+    elif cmd == "url" and args:
+        cmd_url(args[0])
+    elif cmd == "regex" and len(args) >= 2:
+        cmd_regex(args[0], " ".join(args[1:]))
+    elif cmd == "color" and args:
+        cmd_color(args[0])
     elif cmd == "ip":
         cmd_ip()
+    elif cmd == "dns" and args:
+        cmd_dns(args[0])
     elif cmd == "http" and args:
         cmd_http(args[0])
     elif cmd == "port" and len(args) >= 2:
         cmd_port(args[0], args[1])
+    elif cmd == "serve":
+        p = int(args[0]) if args and args[0].isdigit() else 8080
+        cmd_serve(p)
     elif cmd == "sys":
         cmd_sys()
+    elif cmd == "du":
+        cmd_du(args[0] if args else ".")
     elif cmd == "audit":
         cmd_audit(args[0] if args else ".")
     elif cmd == "menu":
